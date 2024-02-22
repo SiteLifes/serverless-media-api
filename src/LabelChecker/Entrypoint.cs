@@ -33,6 +33,7 @@ public class Entrypoint
 
     public async Task Handler(S3Event @event, ILambdaContext context)
     {
+        Console.WriteLine(JsonSerializer.Serialize(@event));
         var parameters = _amazonSimpleSystemsManagement.GetParameterAsync(new GetParameterRequest
         {
             Name = "/media-api/ImageModerationConfig",
@@ -53,10 +54,6 @@ public class Entrypoint
 
         foreach (var record in @event.Records)
         {
-            var arry = record.S3.Object.Key.Split("/");
-            if (arry.Length > 2)
-                continue;
-
             Console.WriteLine(JsonSerializer.Serialize(record));
             var detectModerationLabelsRequest = new DetectModerationLabelsRequest()
             {
