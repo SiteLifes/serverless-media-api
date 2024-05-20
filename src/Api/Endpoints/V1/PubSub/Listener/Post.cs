@@ -31,6 +31,7 @@ public class Post : IEndpoint
         var message = Message.ParseMessage(body);
 
 
+        Console.WriteLine(message.MessageText);
         var isValid = message.Validate();
         if (!isValid)
         {
@@ -38,6 +39,7 @@ public class Post : IEndpoint
             return Results.BadRequest();
         }
 
+        Console.WriteLine(message.MessageText);
         var eventModel = JsonSerializer.Deserialize<EventModel>(message.MessageText);
         
         if (eventModel?.EventName == null)
