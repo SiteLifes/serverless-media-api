@@ -119,5 +119,6 @@ if (!app.Environment.IsDevelopment())
 app.UseMiddleware<ApiKeyValidatorMiddleware>();
 app.UseHttpsRedirection();
 app.MapEndpointsCore(AppDomain.CurrentDomain.GetAssemblies());
+app.UseCors();
 
 app.Run();
