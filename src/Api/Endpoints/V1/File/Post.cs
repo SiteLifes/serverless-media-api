@@ -27,6 +27,9 @@ public class Post : IEndpoint
         var allowedContentTypes = uploadSettingsOptions.Value.AllowedContentTypes;
         if (!allowedContentTypes.ContainsKey(request.ContentType))
         {
+            return Results.BadRequest(
+                $"Allowed content types are: {string.Join(", ", allowedContentTypes.Select(q => q.Key))}");
+
             return Results.ValidationProblem(new Dictionary<string, string[]>
             {
                 {"ContentType", new[] {$"Allowed content types are: {string.Join(", ", allowedContentTypes.Select(q => q.Key))}"}}
