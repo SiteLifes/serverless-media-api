@@ -1,0 +1,268 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFront delivery for the existing SiteLifes and Portofino S3 media buckets.
+
+Parameters:
+  SiteLifesBucketName:
+    Type: String
+    Default: cdn.sitelifes.com
+  PortofinoBucketName:
+    Type: String
+    Default: portofinoyachting-uploads
+  PortofinoStaticBucketName:
+    Type: String
+    Default: portofino-yatching
+  SiteLifesAlias:
+    Type: String
+    Default: ''
+  SiteLifesCertificateArn:
+    Type: String
+    Default: ''
+  PortofinoAlias:
+    Type: String
+    Default: ''
+  PortofinoCertificateArn:
+    Type: String
+    Default: ''
+
+Conditions:
+  UseSiteLifesAlias: !And
+    - !Not [!Equals [!Ref SiteLifesAlias, '']]
+    - !Not [!Equals [!Ref SiteLifesCertificateArn, '']]
+  UsePortofinoAlias: !And
+    - !Not [!Equals [!Ref PortofinoAlias, '']]
+    - !Not [!Equals [!Ref PortofinoCertificateArn, '']]
+
+Resources:
+  MediaResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: sitelifes-media-cors-security
+        Comment: CORS and baseline browser security headers for public media.
+        CorsConfig:
+          AccessControlAllowCredentials: false
+          AccessControlAllowHeaders:
+            Items:
+              - '*'
+          AccessControlAllowMethods:
+            Items:
+              - GET
+              - HEAD
+              - OPTIONS
+          AccessControlAllowOrigins:
+            Items:
+              - '*'
+          AccessControlExposeHeaders:
+            Items:
+              - ETag
+          AccessControlMaxAgeSec: 86400
+          OriginOverride: true
+        SecurityHeadersConfig:
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+  # Objects in the Portofino static-asset bucket carry no Cache-Control header, so
+  # browsers re-fetch theme CSS/JS/images on every visit. Inject one at the edge
+  # instead of rewriting 1000+ objects. One day, not immutable: theme assets are
+  # overwritten in place on site deploys.
+  StaticAssetsResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: portofino-static-assets-cache
+        Comment: CORS, security headers and a browser Cache-Control for theme assets.
+        CorsConfig:
+          AccessControlAllowCredentials: false
+          AccessControlAllowHeaders:
+            Items:
+              - '*'
+          AccessControlAllowMethods:
+            Items:
+              - GET
+              - HEAD
+              - OPTIONS
+          AccessControlAllowOrigins:
+            Items:
+              - '*'
+          AccessControlExposeHeaders:
+            Items:
+              - ETag
+          AccessControlMaxAgeSec: 86400
+          OriginOverride: true
+        SecurityHeadersConfig:
+          ContentTypeOptions:
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: Cache-Control
+              Value: 'public, max-age=86400'
+              Override: false
+
+  SiteLifesOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: sitelifes-media-s3-oac
+        Description: Signed CloudFront access to the SiteLifes media bucket.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  PortofinoOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: portofino-media-s3-oac
+        Description: Signed CloudFront access to the Portofino media bucket.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  PortofinoStaticOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: portofino-static-s3-oac
+        Description: Signed CloudFront access to the Portofino static asset bucket.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SiteLifesDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: SiteLifes S3 media CDN
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Aliases: !If
+          - UseSiteLifesAlias
+          - - !Ref SiteLifesAlias
+          - !Ref AWS::NoValue
+        Origins:
+          - Id: sitelifes-s3-origin
+            DomainName: !Sub '${SiteLifesBucketName}.s3.eu-central-1.amazonaws.com'
+            OriginAccessControlId: !GetAtt SiteLifesOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: sitelifes-s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref MediaResponseHeadersPolicy
+          Compress: true
+        ViewerCertificate: !If
+          - UseSiteLifesAlias
+          - AcmCertificateArn: !Ref SiteLifesCertificateArn
+            MinimumProtocolVersion: TLSv1.2_2021
+            SslSupportMethod: sni-only
+          - CloudFrontDefaultCertificate: true
+
+  # One distribution, two origins: uploaded media at the root, the site theme under
+  # site/*. The uploads bucket has no site/ prefix, so the key spaces cannot collide
+  # and a single hostname can serve both.
+  PortofinoDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: Portofino S3 media CDN
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Aliases: !If
+          - UsePortofinoAlias
+          - - !Ref PortofinoAlias
+          - !Ref AWS::NoValue
+        Origins:
+          - Id: portofino-s3-origin
+            DomainName: !Sub '${PortofinoBucketName}.s3.eu-central-1.amazonaws.com'
+            OriginAccessControlId: !GetAtt PortofinoOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          - Id: portofino-static-s3-origin
+            DomainName: !Sub '${PortofinoStaticBucketName}.s3.eu-central-1.amazonaws.com'
+            OriginAccessControlId: !GetAtt PortofinoStaticOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: portofino-s3-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref MediaResponseHeadersPolicy
+          Compress: true
+        CacheBehaviors:
+          - PathPattern: 'site/*'
+            TargetOriginId: portofino-static-s3-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            ResponseHeadersPolicyId: !Ref StaticAssetsResponseHeadersPolicy
+            Compress: true
+        ViewerCertificate: !If
+          - UsePortofinoAlias
+          - AcmCertificateArn: !Ref PortofinoCertificateArn
+            MinimumProtocolVersion: TLSv1.2_2021
+            SslSupportMethod: sni-only
+          - CloudFrontDefaultCertificate: true
+
+  # Both Portofino buckets keep their existing public-read policies, so no bucket
+  # policy is managed here: OAC-signed requests are already covered by the public
+  # statement, and a missed legacy URL still resolves straight from S3.
+  SiteLifesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteLifesBucketName
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:${AWS::Partition}:s3:::${SiteLifesBucketName}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteLifesDistribution}'
+
+Outputs:
+  SiteLifesDistributionId:
+    Value: !Ref SiteLifesDistribution
+  SiteLifesDistributionDomainName:
+    Value: !GetAtt SiteLifesDistribution.DomainName
+  PortofinoDistributionId:
+    Value: !Ref PortofinoDistribution
+  PortofinoDistributionDomainName:
+    Value: !GetAtt PortofinoDistribution.DomainName
